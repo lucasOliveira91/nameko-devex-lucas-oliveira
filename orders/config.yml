@@ -1,4 +1,8 @@
 DB_URIS:
     "orders:Base": postgresql://${DB_USER:postgres}:${DB_PASSWORD:password}@${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:orders}
 
+SQLALCHEMY_POOL_SIZE: 10
+SQLALCHEMY_POOL_TIMEOUT: 30
+SQLALCHEMY_POOL_RECYCLE: 3600
+
 AMQP_URI: amqp://${RABBIT_USER:guest}:${RABBIT_PASSWORD:guest}@${RABBIT_HOST:localhost}:${RABBIT_PORT:5672}/

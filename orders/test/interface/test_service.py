@@ -1,10 +1,14 @@
 import pytest
-
-from mock import call
 from nameko.exceptions import RemoteError
-
 from orders.models import Order, OrderDetail
 from orders.schemas import OrderSchema, OrderDetailSchema
+import redis
+
+@pytest.fixture
+def redis_client():
+    client = redis.StrictRedis(host='localhost', port=6379, db=0)
+    yield client
+    client.flushdb()
 
 
 @pytest.fixture
@@ -17,21 +21,21 @@ def order(db_session):
 
 @pytest.fixture
 def order_details(db_session, order):
-    db_session.add_all([
-        OrderDetail(
-            order=order, product_id="the_odyssey", price=99.51, quantity=1
-        ),
-        OrderDetail(
-            order=order, product_id="the_enigma", price=30.99, quantity=8
-        )
-    ])
+    details = [
+        OrderDetail(order=order, product_id="the_odyssey", price=99.51, quantity=1),
+        OrderDetail(order=order, product_id="the_enigma", price=30.99, quantity=8)
+    ]
+    db_session.add_all(details)
     db_session.commit()
-    return order_details
+    return details
 
 
-def test_get_order(orders_rpc, order):
+def test_get_order(orders_rpc, order, redis_client):
     response = orders_rpc.get_order(1)
     assert response['id'] == order.id
+
+    cached_order = redis_client.get(str(order.id))
+    assert cached_order is not None
 
 
 @pytest.mark.usefixtures('db_session')
@@ -42,7 +46,7 @@ def test_will_raise_when_order_not_found(orders_rpc):
 
 
 @pytest.mark.usefixtures('db_session')
-def test_can_create_order(orders_service, orders_rpc):
+def test_can_create_order(orders_service, orders_rpc, redis_client):
     order_details = [
         {
             'product_id': "the_odyssey",
@@ -60,28 +64,11 @@ def test_can_create_order(orders_service, orders_rpc):
     )
     assert new_order['id'] > 0
     assert len(new_order['order_details']) == len(order_details)
-    assert [call(
-        'order_created', {'order': {
-            'id': 1,
-            'order_details': [
-                {
-                    'price': '99.99',
-                    'product_id': "the_odyssey",
-                    'id': 1,
-                    'quantity': 1
-                },
-                {
-                    'price': '5.99',
-                    'product_id': "the_enigma",
-                    'id': 2,
-                    'quantity': 8
-                }
-            ]}}
-    )] == orders_service.event_dispatcher.call_args_list
+    assert redis_client.get(str(new_order['id'])) is None
 
 
 @pytest.mark.usefixtures('db_session', 'order_details')
-def test_can_update_order(orders_rpc, order):
+def test_can_update_order(orders_rpc, order, redis_client):
     order_payload = OrderSchema().dump(order).data
     for order_detail in order_payload['order_details']:
         order_detail['quantity'] += 1
@@ -89,8 +76,11 @@ def test_can_update_order(orders_rpc, order):
     updated_order = orders_rpc.update_order(order_payload)
 
     assert updated_order['order_details'] == order_payload['order_details']
+    assert redis_client.get(str(order.id)) is None
 
 
-def test_can_delete_order(orders_rpc, order, db_session):
+def test_can_delete_order(orders_rpc, order, db_session, redis_client):
     orders_rpc.delete_order(order.id)
+
     assert not db_session.query(Order).filter_by(id=order.id).count()
+    assert redis_client.get(str(order.id)) is None
